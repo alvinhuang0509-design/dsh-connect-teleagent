@@ -1,0 +1,4 @@
+# dsh-connect-teleagent 配置包补丁：把独立插件行追加到配置根。
+- insert:
+    - id: teleagent-connect
+      name: 'dsh-connect-teleagent'
