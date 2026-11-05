@@ -225,7 +225,7 @@ function TeleagentPage({ rpcCall }) {
  *  2. Nothing is fetched until the chip is actually shown, so sessions using
  *     other providers cost zero requests.
  */
-function TeleagentComposerPill({ rpcCall, useProjection }) {
+function TeleagentComposerPill({ rpcCall, useProjection, sessionId }) {
   const projection = typeof useProjection === 'function' ? useProjection('modelSelection') : undefined;
   const selected = projection?.next ?? projection?.lastUsed;
   const owned = selected?.provider === PROVIDER;
@@ -385,27 +385,48 @@ function formatClock(ms) {
 export const name = 'teleagent-connect-client';
 export const inject = ['slots', 'connection'];
 
+/**
+ * Register a list-slot entry at most ONCE per id.
+ *
+ * `conversation.input.right` is a `scope: 'session'` list slot, and
+ * `ctx.slots.inject(name, factory)` may materialize the factory more than once
+ * (e.g. once per live session scope). Registering straight from inside that
+ * callback therefore produced N identical chips — the reported symptom was
+ * THREE `· TeleAgent` readouts side by side in one composer row.
+ *
+ * The disposer is kept so a genuine re-apply (plugin fiber restart) can
+ * re-register cleanly, while duplicate invocations inside one apply are ignored.
+ */
+function registerOnce(ctx, slotName, options, Component) {
+  const live = new Map();
+  return ctx.slots.inject(slotName, () => {
+    if (live.has(options.id)) return live.get(options.id);
+    const dispose = ctx.slots.register(options, Component);
+    live.set(options.id, dispose);
+    return dispose;
+  });
+}
+
 export function apply(ctx) {
   ctx.effect(() => installStyles(), 'teleagent-connect: install styles');
   const rpcCall = async (method, payload, signal) =>
     unwrap(await callRpc(ctx.connection, method, payload, signal));
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
+  registerOnce(ctx, 'settings.section', {
     name: 'settings.section',
     id: 'teleagent-connect',
     order: 51,
     label: () => 'TeleAgent',
     inject: () => ({ rpcCall }),
-  }, TeleagentPage));
+  }, TeleagentPage);
 
   // The readout in the composer tool row, immediately BEFORE the model selector
-  // (both live in the same `standardControls` row). Registered unconditionally;
-  // the component hides itself unless this session is pointed at the teleagent
-  // provider. `useProjection` is a HOST standard prop on this slot, so it
-  // arrives in the component props; `inject` only adds our own `rpcCall`.
-  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
+  // (both live in the same `standardControls` row). `registerOnce` keeps it to a
+  // single chip even when the session-scoped factory runs several times; the
+  // component itself hides unless this session is pointed at `teleagent`.
+  registerOnce(ctx, 'conversation.input.right', {
     name: 'conversation.input.right',
     id: 'teleagent-connect-credits',
     order: 0,
     inject: () => ({ rpcCall }),
-  }, TeleagentComposerPill));
+  }, TeleagentComposerPill);
 }

@@ -35,10 +35,16 @@ const jsxRuntime = { jsx: React.createElement, jsxs: React.createElement, Fragme
 
 // ── Load the bundle through the module loader contract ───────────────────
 const registered = [];
+// The REAL host may materialize a session-scoped inject factory more than once
+// (e.g. once per live session). Model that: run the factory THREE times, which
+// is the exact shape of the reported bug (three identical chips in one row).
+const FACTORY_RUNS = 3;
 const ctx = {
   effect: () => () => {},
   slots: {
-    inject: (_name, fn) => { fn(); },
+    inject: (_name, fn) => {
+      for (let i = 0; i < FACTORY_RUNS; i++) fn();
+    },
     register: (opts, Component) => { registered.push({ opts, Component }); return () => {}; },
   },
   connection: { rpc: { call: async () => ({ ok: true, value: {} }) } },
@@ -97,6 +103,14 @@ assert.ok(!names.includes('conversation.composer.dock#teleagent-connect-credits'
 const pill = registered.find((r) => r.opts.id === 'teleagent-connect-credits');
 assert.equal(pill.opts.name, 'conversation.input.right');
 assert.equal(pill.opts.order, 0);
+
+// ── DUPLICATE GUARD (regression: three chips in one composer row) ───────
+// The inject factory ran FACTORY_RUNS times above; the chip must still be
+// registered exactly ONCE, and the settings section exactly once too.
+const creditRegs = registered.filter((r) => r.opts.id === 'teleagent-connect-credits');
+assert.equal(creditRegs.length, 1, `chip must register exactly once despite ${FACTORY_RUNS} factory runs, got ${creditRegs.length}`);
+const sectionRegs = registered.filter((r) => r.opts.id === 'teleagent-connect');
+assert.equal(sectionRegs.length, 1, 'settings section must register exactly once');
 
 // ── Gating ──────────────────────────────────────────────────────────────
 function render(props) {
