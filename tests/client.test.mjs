@@ -123,12 +123,12 @@ function render(props) {
 assert.equal(render({ useProjection: () => ({ lastUsed: { provider: 'workbuddy', model: 'hy4free' }, next: null }) }), null);
 // No projection => nothing.
 assert.equal(render({}), null);
-// teleagent selected => chip renders with points + account name.
+// teleagent selected => chip renders.
 const tree = render({ useProjection: () => ({ lastUsed: null, next: { provider: 'teleagent', model: 'chat-lite' } }) });
 assert.ok(tree, 'must render for teleagent');
 const flat = JSON.stringify(tree);
-assert.ok(flat.includes('ta2-pill'), 'chip class present');
-assert.ok(flat.includes('ta2-pill-num'), 'numeric value slot present');
+assert.ok(flat.includes('t2-pill'), 'chip wrapper class present');
+assert.ok(flat.includes('t2-chip'), 'chip button class present');
 // `next` outranks `lastUsed`.
 assert.ok(render({ useProjection: () => ({ lastUsed: { provider: 'workbuddy', model: 'x' }, next: { provider: 'teleagent', model: 'chat-pro' } }) }));
 
@@ -138,16 +138,29 @@ assert.ok(render({ useProjection: () => ({ lastUsed: { provider: 'workbuddy', mo
 // Two defects produced that: (a) credits.* ran inside the same Promise.all as
 // status, so a signed-out rejection discarded the successful status; (b) one
 // boolean carried both "signed-out" and "read failed".
-//
-// The RPC layer is the contract that keeps them apart, so drive it directly:
-// status reports loggedIn:false while credits throws, and the panel must be
-// able to tell that apart from a transport error.
 const bundleSrc = readFileSync(BUNDLE, 'utf8');
 assert.ok(bundleSrc.includes('signed-out'), 'bundle must carry a distinct signed-out state');
-assert.ok(bundleSrc.includes('本机还没有 TeleAgent 登录凭据'), 'signed-out copy must name the real cause');
+assert.ok(bundleSrc.includes('这台机器还没有登录 TeleAgent'), 'signed-out copy must name the real cause');
 assert.ok(
   !/Promise\.all\(\[\s*[^\]]*rpcCall\("status"\)[^\]]*rpcCall\("credits\.balance"\)/.test(bundleSrc),
   'status must not share a Promise.all with credits.* — that is what swallowed the real answer',
 );
+
+// ── Themed surfaces must use tokens the host actually defines ──────────
+// The shipped 1.0.2 popover was light text on hard-coded white: it used
+// `--dsw-alias-bg-elevated` / `--dsw-alias-border-default`, which do not exist,
+// so the background fell back to #fff while the text token resolved to the dark
+// theme's light grey. Assert the invented names are gone and the real ones used.
+for (const ghost of ['--dsw-alias-bg-elevated', '--dsw-alias-border-default']) {
+  assert.ok(!bundleSrc.includes(ghost), `invented token ${ghost} must not be used`);
+}
+for (const real of ['--dsw-alias-bg-layer-3', '--dsw-alias-border-l2', '--dsw-alias-label-secondary']) {
+  assert.ok(bundleSrc.includes(real), `themed surface must use the real token ${real}`);
+}
+
+// ── Signed-out panel must offer a way out, not just a message ──────────
+assert.ok(bundleSrc.includes('打开官方登录页'), 'signed-out panel must offer the login page');
+assert.ok(bundleSrc.includes('login.submit'), 'signed-out panel must accept a pasted token inline');
+
 
 console.log('✓ client bundle: slots registered (tool row) + provider gating + signed-out copy');
