@@ -121,6 +121,33 @@ sh: pnpm: command not found
   - `/teleagent balance` / `checkin` / `claim` / `user`
 - **模型选择器**：选 `teleagent` provider 下的模型即可。
 
+## 上下文大小
+
+**服务端不提供这个值。** 我试过 `/api/v1/models`、`/cowork/models`、`/api/v1/model/list`、`/user/portal/companyStore/models`、`/cowork/config`，全部 404；推理响应的 `usage` 里也只有 token 计数，没有窗口上限。唯一权威来源是官方桌面客户端内嵌的种子表：**三档共享 100K 上下文 / 16384 输出**（客户端原文「预置档位共享一份 preset-context」）。
+
+所以本插件把窗口做成**可声明的预算**，默认取官方值：
+
+- 面板（设置 → TeleAgent →「上下文大小」）可一键选 100K / 200K / 500K / 1M，或填任意数值（16K–2M）。
+- 保存后写入 `~/.dsh/teleagent/config.json`，`resolveModel` 与模型列表在下一次调用即生效，无需重启。
+- 账号面板里也会显示当前档位实际使用的窗口（如「上下文 100K」）。
+
+⚠️ 这是**给 DSH 的预算声明**，不是服务端回报的上限：
+
+- 调**小** → DSH 更早压缩上下文，绝不会因此被服务端拒绝；
+- 调**大** → 延迟压缩，但如果超出服务端真实上限，请求可能被拒绝或静默截断。
+
+配置示例：
+
+```json
+{
+  "contextWindow": 200000,
+  "maxOutputTokens": 16384,
+  "perModel": { "chat-pro": { "contextWindow": 500000 } }
+}
+```
+
+`perModel` 可给单个档位单独设定；非法值（越界、非数字、文件损坏）一律回退到默认，不会让 provider 起不来。
+
 ## 与旧插件的差异
 
 | 能力 | 说明 |

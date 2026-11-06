@@ -111,6 +111,13 @@ function formatCredits(value) {
   if (!Number.isFinite(n)) return '—';
   return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
+function formatTokens(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return '—';
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(v % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (v >= 1_000) return `${Math.round(v / 1_000)}K`;
+  return String(v);
+}
 function formatClock(ms) {
   try { return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
   catch { return '—'; }
@@ -222,6 +229,8 @@ function TeleagentChip({ rpcCall, useProjection }) {
   const signedOut = problem === 'signed-out';
   const total = balance?.balance;
   const nickname = status?.nickname;
+  // The tier the session is pointed at, from the catalogue `status` returns.
+  const modelRow = status?.models?.find((m) => m.id === selected?.model);
 
   // Chip copy is the whole readout when collapsed, so it states the situation
   // rather than a bare placeholder: "登录 TeleAgent" is an invitation, "—" was
@@ -298,6 +307,12 @@ function TeleagentChip({ rpcCall, useProjection }) {
     ] });
   } else {
     const rows = [];
+    if (modelRow?.contextWindow) {
+      rows.push(
+        jsx('span', { className: 'k', key: 'k-ctx', children: '上下文' }),
+        jsx('span', { className: 'v', key: 'v-ctx', children: formatTokens(modelRow.contextWindow) }),
+      );
+    }
     if (balance?.plan) rows.push(jsx('span', { className: 'k', key: 'k-plan', children: '套餐' }), jsx('span', { className: 'v', key: 'v-plan', children: balance.plan }));
     if (checkin) {
       rows.push(
@@ -399,6 +414,9 @@ function TeleagentPage({ rpcCall }) {
   const { status, balance, checkin, problem, busy, load } = state;
 
   const [models, setModels] = useState([]);
+  const [config, setConfig] = useState(null);
+  const [ctxDraft, setCtxDraft] = useState('');
+  const [savingCtx, setSavingCtx] = useState(false);
   const [callback, setCallback] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -406,8 +424,14 @@ function TeleagentPage({ rpcCall }) {
 
   const refresh = useCallback(async () => {
     setError('');
-    try { const s = await rpcCall('status'); setModels(s?.models ?? []); }
-    catch { /* the shared loader reports failures */ }
+    try {
+      const [s, c] = await Promise.all([
+        rpcCall('status').catch(() => null),
+        rpcCall('config.get').catch(() => null),
+      ]);
+      if (s) setModels(s.models ?? []);
+      if (c) { setConfig(c); setCtxDraft(String(c.contextWindow)); }
+    } catch { /* the shared loader reports failures */ }
   }, [rpcCall]);
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -440,6 +464,25 @@ function TeleagentPage({ rpcCall }) {
     setNotice(r?.unchanged ? '凭据已完整，无需修复' : '已补齐 installId / deviceId');
     await load();
   });
+
+  const saveContext = async () => {
+    const value = Number(ctxDraft);
+    const bounds = config?.limits?.contextWindow;
+    if (!Number.isFinite(value)) { setError('上下文大小需要是一个数字'); return; }
+    if (bounds && (value < bounds.min || value > bounds.max)) {
+      setError(`上下文大小需在 ${formatTokens(bounds.min)} 到 ${formatTokens(bounds.max)} 之间`);
+      return;
+    }
+    setSavingCtx(true); setError(''); setNotice('');
+    try {
+      const next = await rpcCall('config.set', { contextWindow: Math.round(value) });
+      setConfig({ ...(config ?? {}), ...next });
+      setCtxDraft(String(next.contextWindow));
+      setNotice(`上下文大小已设为 ${formatTokens(next.contextWindow)}，下一个请求生效`);
+      await refresh();
+    } catch (e) { setError(e.message || String(e)); }
+    finally { setSavingCtx(false); }
+  };
 
   const doClaim = () => run(async () => {
     const r = await rpcCall('credits.claim');
@@ -511,8 +554,41 @@ function TeleagentPage({ rpcCall }) {
     ] }),
 
     jsxs('div', { className: 't2-card', children: [
+      jsx('div', { className: 't2-key', children: '上下文大小' }),
+      jsx('div', { className: 't2-muted', children: config
+        ? `当前 ${formatTokens(config.contextWindow)}（官方客户端声明值：${formatTokens(config.defaults?.contextWindow)}）。这是给 DSH 的预算声明，不是服务端回报的上限；调大可能被服务端拒绝或截断，调小会更早触发压缩。`
+        : '读取中…' }),
+      jsxs('div', { className: 't2-row', children: [
+        ...[100_000, 200_000, 500_000, 1_000_000].map((preset) => jsx('button', {
+          key: preset,
+          className: 't2-btn',
+          disabled: savingCtx || config?.contextWindow === preset,
+          onClick: () => setCtxDraft(String(preset)),
+          children: formatTokens(preset),
+        }, preset)),
+      ] }),
+      jsxs('div', { className: 't2-row', children: [
+        jsx('input', {
+          className: 't2-input',
+          value: ctxDraft,
+          inputMode: 'numeric',
+          placeholder: '自定义，如 100000',
+          onChange: (e) => setCtxDraft(e.target.value),
+          onKeyDown: (e) => { if (e.key === 'Enter') saveContext(); },
+        }),
+        jsx('button', {
+          className: 't2-btn primary',
+          disabled: savingCtx || !String(ctxDraft).trim(),
+          onClick: saveContext,
+          children: savingCtx ? '保存中…' : '保存',
+        }),
+      ] }),
+      jsx('div', { className: 't2-dim', children: `取值范围 ${formatTokens(config?.limits?.contextWindow?.min ?? 16_000)} – ${formatTokens(config?.limits?.contextWindow?.max ?? 2_000_000)}；单个模型的输出上限 ${formatTokens(config?.maxOutputTokens ?? 16_384)}。` }),
+    ] }),
+
+    jsxs('div', { className: 't2-card', children: [
       jsx('div', { className: 't2-key', children: `可用模型（${models.length}）` }),
-      jsx('div', { className: 't2-dim', children: models.map((m) => `${m.name}（${m.id}）`).join(' · ') || '加载中…' }),
+      jsx('div', { className: 't2-dim', children: models.map((m) => `${m.name}（${m.id}）· ${formatTokens(m.contextWindow)}`).join('  ·  ') || '加载中…' }),
     ] }),
 
     error && jsx('div', { className: 't2-err', children: error }),
