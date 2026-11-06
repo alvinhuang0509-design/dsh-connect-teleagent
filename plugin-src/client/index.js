@@ -362,7 +362,15 @@ function TeleagentChip({ rpcCall, useProjection }) {
         jsx('div', { className: 't2-dim', children: '登录完成后窗口会自动关闭，无需复制任何东西。' }),
       ] }),
       browserUnavailable && jsx('div', { className: 't2-err', children: browser.available.note }),
-      browser.state.phase === 'failed' && jsx('div', { className: 't2-err', children: browser.state.note }),
+      browser.state.phase === 'failed' && jsxs('div', { className: 't2-login', style: { flexDirection: 'column', alignItems: 'stretch' }, children: [
+        jsx('div', { className: 't2-err', style: { whiteSpace: 'pre-wrap' }, children: browser.state.note || '浏览器登录失败' }),
+        jsx('button', {
+          type: 'button',
+          className: 't2-btn',
+          onClick: () => { void browser.start(); },
+          children: '重试浏览器登录',
+        }),
+      ] }),
 
       !running && jsxs('div', { className: 't2-login', children: [
         jsx('input', {
@@ -626,7 +634,7 @@ function TeleagentPage({ rpcCall }) {
           onClick: () => { void browser.start(); },
           children: '浏览器登录（推荐）',
         }) }),
-      browser.state.phase === 'failed' && jsx('div', { className: 't2-err', children: browser.state.note }),
+      browser.state.phase === 'failed' && jsx('div', { className: 't2-err', style: { whiteSpace: 'pre-wrap' }, children: browser.state.note }),
       browser.state.phase === 'done' && jsx('div', { className: 't2-ok', children: browser.state.note }),
 
       jsx('div', { className: 't2-key', children: '或手动粘贴 token' }),
