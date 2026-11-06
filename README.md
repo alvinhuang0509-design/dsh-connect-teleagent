@@ -140,7 +140,12 @@ sh: pnpm: command not found
 - **零依赖**：Node 22+ 自带全局 `WebSocket` 和 `fetch`，CDP 直接手写，不引第三方客户端库。
 - **多目标跟踪**：在浏览器层面 `Target.setDiscoverTargets` + `setAutoAttach`，回调落在新窗口或新标签也能看到（只 attach 单个页面会漏掉真实流程）。
 - 用 `--remote-debugging-port=0` 让 Chrome 自己选端口，从 stderr 的 `DevTools listening on ws://…` 取实际地址（端口写死会和用户的其它调试实例冲突）。
-- **捕获 `teleai-cowork://` deeplink 导航**（唯一携带 token 的地方）。真实流程里 token 不在任何 HTTP 响应里——页面直接导航到 deeplink，Chrome 无法交给任何程序处理。用 `Fetch.enable` **只暂停这一个协议**（`urlPattern: teleai-cowork://*`），从被暂停的请求 URL 里取 token。暂停 http(s) 会破坏渲染，所以绝不暂停它们。
+- **从此处取 token：`Page.frameScheduledNavigation` / `frameRequestedNavigation`**。真实登录的完整事件序列（2026-11-07 实测）：
+  1. `cowork/auth?code=ucc.…` —— 只有 code
+  2. `teleai-cowork://auth?token=I7Kp2X%3AeyJ…` —— **token 在这里**
+  3. `net::ERR_ABORTED` —— Chrome 不认识这个协议
+
+  token 不在任何 HTTP 响应里，所以 `Network.*` 看不到；`Fetch.enable` 也拦不住自定义协议（实测真实登录期间 `Fetch.requestPaused` 事件数为 0）。这两个 Page 域事件是唯一能观察到它的地方，且需要该会话 `Page.enable`。
 - **被动监听 `Network.*` 事件**作为兜底（302 的 `Location`、换 token 的响应体）。最初用 `Fetch.enable` 在 Response 阶段拦截，虽然能拿到 header，但**暂停本身会破坏页面**：即使成对调用 `continueResponse`（返回成功），文档也不渲染，登录页脚本不执行，回调永远不发生——已用本地假授权服务器反复实测确认。改为只观察：`Location` 响应头、`requestWillBeSent` 的 `redirectResponse`、以及 200 响应体（`Network.getResponseBody` 对已完成请求不消耗内容）。
 - 启动参数关掉后台节流（`--disable-background-timer-throttling` 等），否则登录页用定时器做的跳转会被后台标签节流卡住。
 - 浏览器发现顺序：Chrome → Chromium → Edge → Brave → Vivaldi（macOS/Windows/Linux 各自路径，Windows 在环境变量缺失时回退到常规安装根）。
