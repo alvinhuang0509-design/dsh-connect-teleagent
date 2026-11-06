@@ -121,6 +121,32 @@ sh: pnpm: command not found
   - `/teleagent balance` / `checkin` / `claim` / `user`
 - **模型选择器**：选 `teleagent` provider 下的模型即可。
 
+## 在新机器上登录：token 到底在哪
+
+⚠️ **不要指望从地址栏复制 token——那里没有。** 这是最初版本写错的指引，导致用户反复粘贴失败。
+
+授权完成后浏览器停在：
+
+```
+https://agent.teleai.com.cn/superCowork/sapi/cowork/auth?code=ucc.XXXXXX
+                                            ↑ 只有 code，没有 token
+```
+
+token 实际走的是 **`teleai-cowork://auth?token=…`** 这条 deeplink，由**官方桌面端拦截导航**取走——从不出现在地址栏；浏览器也不会把跨协议导航打印到 Console（F12 Console 里只有页面自己的脚本日志）。而且 **code 是一次性的**：已被消费的 code 和我们无法兑换，拿它去换 token 得到的响应与假 code 逐字节相同，所以**不存在「交给插件、插件去换」这条路**。
+
+**唯一能在浏览器侧拿到 token 的地方是 Network 面板**：
+
+1. 打开浏览器开发者工具 → **Network**，勾选 **「保留日志 / Preserve log」**（不勾的话授权跳转会清空记录）。
+2. 在面板里点「打开官方登录页」，**重新完成一次授权**。
+3. 找到 `cowork/auth?code=…` 这条请求：
+   - 若响应是 **302** → 看响应头 **`Location`**；
+   - 若响应是 **HTML** → 看页面随后发出的那个**换 token 请求的响应体**。
+4. 把其中的 token，或整条 `teleai-cowork://auth?token=…` 链接，粘贴到面板输入框。
+
+插件接受四种输入：完整回调 URL、`teleai-cowork://` deeplink、裸 token、以及夹带 token 的一句话。如果粘的是只有 `code` 的地址，插件会明确告诉你「这是授权 code，不是 token」并给出上面的步骤，而不是笼统地报「未找到 token」。
+
+> 已有官方桌面端登录过的机器，插件会直接复用本机凭据，**不需要走这一步**——只有新机器或凭据过期时才需要。
+
 ## 上下文大小
 
 **服务端不提供这个值。** 我试过 `/api/v1/models`、`/cowork/models`、`/api/v1/model/list`、`/user/portal/companyStore/models`、`/cowork/config`，全部 404；推理响应的 `usage` 里也只有 token 计数，没有窗口上限。唯一权威来源是官方桌面客户端内嵌的种子表：**三档共享 100K 上下文 / 16384 输出**（客户端原文「预置档位共享一份 preset-context」）。
@@ -153,7 +179,7 @@ sh: pnpm: command not found
 | 能力 | 说明 |
 |---|---|
 | 推理 | ✅ v1 签名，OpenAI 兼容 SSE，工具调用、system、max_tokens、temperature、stop |
-| 登录 | ✅ 复用现有凭据 + 手动粘贴回调/token（不做 CDP 浏览器自动登录） |
+| 登录 | ✅ 复用现有凭据 + 手动粘贴 token（从 Network 面板取；不做 CDP 浏览器自动登录） |
 | 积分/签到 | ✅ 余额（`data.current_points_balance`）、每日可领/累计天数/累计积分/今日是否已领、一键领取（GET `checkTask`） |
 | 多账号池 | ⚠️ 只使用 `jet-hub/state.json` 里启用的那一个账号（不做换号） |
 | 模型目录 | 静态表 `chat-nano` 轻量 / `chat-lite` 智能 / `chat-pro` 旗舰（官方客户端档位 ID；网关不提供模型列表端点，三档共享 100K 上下文 / 16384 输出） |

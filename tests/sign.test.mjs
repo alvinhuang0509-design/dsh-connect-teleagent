@@ -91,6 +91,30 @@ for (const shape of [
   assert.equal(parseLogin(shape).token, token, `must parse ${shape.slice(0, 40)}`);
 }
 assert.equal(parseLogin('garbage').token, undefined);
+assert.equal(parseLogin('garbage').kind, 'no-token');
+
+// The documented dead end: after authorising, the browser lands on a URL whose
+// only parameter is a one-time `code`. No token is in it — the token travels in
+// a `teleai-cowork://auth?token=…` deeplink the desktop app intercepts. The
+// parser must NAME that situation instead of reporting a generic miss, because
+// "no token found" at a value that visibly contains a code is exactly what sent
+// users round the loop.
+const codeOnly = 'https://agent.teleai.com.cn/superCowork/sapi/cowork/auth?code=ucc.ABC123def';
+const codeParsed = parseLogin(codeOnly);
+assert.equal(codeParsed.token, undefined, 'a code is not a token');
+assert.equal(codeParsed.kind, 'code-only', 'a code-only paste must be reported as such');
+assert.match(codeParsed.reason, /code/, 'the reason must mention the code');
+
+// The deeplink shape the official desktop app receives IS a valid source.
+assert.equal(parseLogin(`teleai-cowork://auth?token=${encodeURIComponent(token)}`).token, token);
+// An empty or whitespace-only paste is its own case.
+assert.equal(parseLogin('   ').kind, 'empty');
+// A sentence that CONTAINS a token still resolves: users paste "这是 token：…"
+// as readily as the bare value, and refusing it would be user-hostile for no
+// safety gain (the credential is the credential wherever it sits). Prose with
+// no token in it must still be rejected, which the `garbage` case above pins.
+assert.equal(parseLogin(`这是 token：${token}`).token, token);
+assert.equal(parseLogin('这只是一句话，没有任何凭据').token, undefined);
 
 // 11. expiry
 const exp = tokenExpiresAtMs(token);

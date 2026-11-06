@@ -297,7 +297,7 @@ function TeleagentChip({ rpcCall, useProjection }) {
           children: submitting ? '登录中…' : '登录',
         }),
       ] }),
-      jsx('div', { className: 't2-dim', children: '在登录页完成授权后，把地址栏里那条带 token 的链接复制过来即可。' }),
+      jsx('div', { className: 't2-dim', children: '授权后地址栏只有 code，没有 token。token 需在浏览器开发者工具 Network 面板勾选「保留日志」后重新授权一次，从 cowork/auth 请求的 Location 响应头（或换 token 请求的响应体）里取——完整步骤见「设置 → TeleAgent」。' }),
     ] });
   } else if (!loaded) {
     body = jsxs('div', { className: 't2-pop-body', children: [
@@ -521,7 +521,17 @@ function TeleagentPage({ rpcCall }) {
     ] }),
 
     jsxs('div', { className: 't2-card', children: [
-      jsx('div', { className: 't2-muted', children: '在官方页面完成授权后，把地址栏里带 token 的链接（或 token 本身）粘贴到下面。' }),
+      jsxs('div', { className: 't2-muted', children: [
+        jsx('div', { children: '⚠️ 授权完成后地址栏里是 ' }),
+        jsx('code', { children: '…/cowork/auth?code=ucc.XXXX' }),
+        jsx('div', { children: '——只有 code，没有 token。token 由官方桌面端的 teleai-cowork:// 协议取走，浏览器地址栏和 Console 都看不到，且 code 是一次性的、无法再换成 token。' }),
+        jsxs('ol', { style: { margin: '8px 0 0', paddingLeft: 18 }, children: [
+          jsx('li', { children: '打开浏览器开发者工具 → Network 面板，勾选「保留日志 / Preserve log」' }),
+          jsx('li', { children: '重新点「打开官方登录页」并完成一次授权' }),
+          jsx('li', { children: '找到 cowork/auth?code=… 这条请求：若响应是 302，看响应头 Location；若是 HTML，看页面随后发出的换 token 请求的响应体' }),
+          jsx('li', { children: '把其中的 token，或整条 teleai-cowork://auth?token=… 链接，粘贴到下面' }),
+        ] }),
+      ] }),
       jsxs('div', { className: 't2-row', children: [
         jsx('input', {
           className: 't2-input',
