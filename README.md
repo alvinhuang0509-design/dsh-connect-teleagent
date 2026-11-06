@@ -104,6 +104,8 @@ sh: pnpm: command not found
 - **输入框工具行、模型名左侧的账号条**（`conversation.input.right`，与 `conversation.input.model` 同一行、渲染在它之前）：只在当前会话选中 `teleagent` 模型时出现，显示 `● 16,034.51 · AlvinH`；点开是账号面板（优先向上弹出，空间不足则向下）——账号名 +「当前选用」、积分余额、套餐、今日签到 / 每日可领 / 累计天数与积分、活动标题、「一键刷新」与最近刷新时间。切到其它 provider 时自动隐藏，且**不发任何请求**（120s 轮询，仅在可见时拉取）。
 
 > **1.0.1 修复**：`conversation.input.right` 是 `scope: 'session'` 的 list slot，宿主可能对同一个 inject 工厂执行多次（每个活跃会话一次）。原先直接在工厂里 `register`，导致同一个账号条被注册 N 份——表现为输入框里并排出现三个 `· TeleAgent`。现在注册走 `registerOnce()`，按 id 去重，重复调用只返回既有 disposer。
+>
+> **1.0.2 修复**：在**没有登录凭据的机器**上（例如刚在另一台客户端装好插件），账号条曾显示红色的「积分读取失败，请稍后重试」，账号名也空白。原因有两个：① `status` 与 `credits.balance` 放在同一个 `Promise.all` 里，`credits` 因未登录抛错时把 `status` 的成功结果一起丢弃；② 前端只用一个布尔值，把「未登录」和「读取失败」混为一谈。现在先单独取 `status`，**只有已登录才去拉积分**，并区分两种状态——未登录时显示 `● 未登录 · TeleAgent`，面板里说明「本机还没有 TeleAgent 登录凭据」并指向设置页；真正的读取失败才显示红色报错。
 - **设置 → TeleAgent**：查看登录状态/有效期、打开官方登录页、粘贴回调 URL/token 登录、修复凭据、查询积分余额、查签到状态、一键领取积分、查看模型列表。
 - **斜杠命令**（headless 也可用）：
   - `/teleagent status` — 登录状态

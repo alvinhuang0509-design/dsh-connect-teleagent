@@ -1,6 +1,6 @@
 {
   "name": "dsh-connect-teleagent",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "DeepSeek Harness 插件：接入中国电信天翼 AI 星辰超级智能体（TeleAgent），修正 v1 云网关签名（两轮 HMAC-SHA256），支持积分/每日签到与输入框内账号条",
   "type": "module",
   "main": "lib/index.js",

@@ -77,6 +77,7 @@ const CSS = `
 .ta2-panel-meta { font-size: 11px; opacity: .62; line-height: 1.6; }
 .ta2-panel-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; opacity: .62; }
 .ta2-panel-err { color: #d03050; font-size: 11px; }
+.ta2-panel-empty { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; }
 `;
 
 function installStyles() {
@@ -235,22 +236,54 @@ function TeleagentComposerPill({ rpcCall, useProjection, sessionId }) {
   const [checkin, setCheckin] = useState(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+  /**
+   * Why the readout has no figure. Distinct from a transport failure:
+   *   'signed-out' — no credential on this machine yet (never logged in),
+   *                  which is the normal state on a fresh install elsewhere;
+   *   'failed'     — we are logged in but the read itself did not come back.
+   * Collapsing the two into one boolean told a signed-out user their points
+   * "failed to load", which reads like a broken plugin rather than a missing
+   * login.
+   */
+  const [problem, setProblem] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(0);
   const rootRef = React.useRef(null);
   const panelRef = React.useRef(null);
   const [pos, setPos] = useState(null);
 
+  /**
+   * Read status first, then the credit figures ONLY when signed in.
+   *
+   * The previous version ran all three calls in one `Promise.all`, so a
+   * `credits.balance` rejection (thrown by the service when `credential()` is
+   * undefined) discarded the successful `status` too — the panel then showed a
+   * blank account name and a red "积分读取失败" line even though the real
+   * answer was "not signed in". Failures are now contained per call.
+   */
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      const [s, b, c] = await Promise.all([
-        rpcCall('status'), rpcCall('credits.balance'), rpcCall('credits.status'),
+      const s = await rpcCall('status');
+      setStatus(s);
+      if (!s?.loggedIn) {
+        setBalance(null); setCheckin(null);
+        setProblem('signed-out');
+        setLastRefresh(Date.now());
+        return;
+      }
+      const [b, c] = await Promise.all([
+        rpcCall('credits.balance').catch(() => null),
+        rpcCall('credits.status').catch(() => null),
       ]);
-      setStatus(s); setBalance(b); setCheckin(c);
-      setFailed(false); setLastRefresh(Date.now());
-    } catch { setFailed(true); }
-    finally { setBusy(false); }
+      setBalance(b); setCheckin(c);
+      // A null balance with a live credential means the read genuinely failed;
+      // a missing figure inside it (balance undefined) is a separate, calmer
+      // state the copy already covers.
+      setProblem(b === null ? 'failed' : null);
+      setLastRefresh(Date.now());
+    } catch {
+      setProblem('failed');
+    } finally { setBusy(false); }
   }, [rpcCall]);
 
   // Fetch only while the pill is on screen for this provider.
@@ -298,9 +331,15 @@ function TeleagentComposerPill({ rpcCall, useProjection, sessionId }) {
   if (!owned) return null;
 
   const total = balance?.balance;
-  const valueText = total === undefined ? '—' : formatCredits(total);
-  const dotClass = failed ? 'err' : total === undefined ? 'warn' : 'ok';
+  const signedOut = problem === 'signed-out';
+  const valueText = signedOut ? '未登录' : total === undefined ? '—' : formatCredits(total);
+  const dotClass = problem === 'failed' ? 'err' : (signedOut || total === undefined) ? 'warn' : 'ok';
   const nickname = status?.nickname ?? 'TeleAgent';
+  const chipTitle = signedOut
+    ? '尚未登录 TeleAgent（点击查看）'
+    : problem === 'failed'
+      ? '积分读取失败（点击重试）'
+      : `${nickname} · 积分 ${valueText}（点击查看账号）`;
 
   return jsxs('span', { ref: rootRef, className: 'ta2-pill', children: [
     jsxs('button', {
@@ -308,13 +347,13 @@ function TeleagentComposerPill({ rpcCall, useProjection, sessionId }) {
       className: 'ta2-pill-btn',
       'aria-haspopup': 'dialog',
       'aria-expanded': open,
-      title: failed ? '积分读取失败（点击重试）' : `${nickname} · 积分 ${valueText}（点击查看账号）`,
+      title: chipTitle,
       onClick: () => setOpen((v) => !v),
       children: [
         jsx('span', { className: `ta2-pill-dot ${dotClass}` }),
         jsx('span', { className: 'ta2-pill-num', children: valueText }),
         jsx('span', { className: 'ta2-pill-sep', children: '·' }),
-        jsx('span', { children: nickname }),
+        jsx('span', { children: signedOut ? 'TeleAgent' : nickname }),
       ],
     }),
     open && pos && createPortal(
@@ -325,7 +364,7 @@ function TeleagentComposerPill({ rpcCall, useProjection, sessionId }) {
         style: { top: `${pos.top}px`, left: `${pos.left}px` },
         children: [
           jsxs('div', { className: 'ta2-panel-head', children: [
-            jsx('span', { className: 'ta2-panel-title', children: nickname }),
+            jsx('span', { className: 'ta2-panel-title', children: signedOut ? 'TeleAgent' : nickname }),
             jsx('button', {
               type: 'button',
               className: 'ta2-panel-refresh',
@@ -334,21 +373,26 @@ function TeleagentComposerPill({ rpcCall, useProjection, sessionId }) {
               children: busy ? '刷新中…' : '一键刷新',
             }),
           ] }),
-          jsxs('table', { className: 'ta2-panel-table', children: [
-            jsx('thead', { children: jsxs('tr', { children: [
-              jsx('th', { children: '账号' }),
-              jsx('th', { className: 'num', children: '积分' }),
-            ] }) }),
-            jsx('tbody', { children: jsx('tr', { children: [
-              jsxs('td', { children: [
-                jsx('div', { className: 'ta2-panel-name', children: [
-                  jsx('span', { children: nickname }),
-                  jsx('span', { className: 'ta2-panel-current', children: '当前选用' }),
+          signedOut
+            ? jsxs('div', { className: 'ta2-panel-empty', children: [
+              jsx('div', { className: 'ta2-panel-meta', children: '本机还没有 TeleAgent 登录凭据。' }),
+              jsx('div', { className: 'ta2-panel-meta', children: '在「设置 → TeleAgent」里打开官方登录页并粘贴回调 URL 或 token 即可。' }),
+            ] })
+            : jsxs('table', { className: 'ta2-panel-table', children: [
+              jsx('thead', { children: jsxs('tr', { children: [
+                jsx('th', { children: '账号' }),
+                jsx('th', { className: 'num', children: '积分' }),
+              ] }) }),
+              jsx('tbody', { children: jsx('tr', { children: [
+                jsxs('td', { children: [
+                  jsx('div', { className: 'ta2-panel-name', children: [
+                    jsx('span', { children: nickname }),
+                    jsx('span', { className: 'ta2-panel-current', children: '当前选用' }),
+                  ] }),
                 ] }),
-              ] }),
-              jsx('td', { className: 'num', children: valueText }),
-            ] }) }),
-          ] }),
+                jsx('td', { className: 'num', children: valueText }),
+              ] }) }),
+            ] }),
           balance?.plan && jsxs('div', { className: 'ta2-panel-meta', children: [
             '套餐：', balance.plan,
           ] }),
@@ -358,7 +402,8 @@ function TeleagentComposerPill({ rpcCall, useProjection, sessionId }) {
             ` · 累计 ${checkin.totalClaimDays ?? 0} 天 / ${checkin.totalClaimedPoints ?? 0} 分`,
           ] }),
           checkin?.activityTitle && jsxs('div', { className: 'ta2-panel-meta', children: ['活动：', checkin.activityTitle] }),
-          failed && jsx('div', { className: 'ta2-panel-err', children: '积分读取失败，请稍后重试' }),
+          problem === 'failed' && jsx('div', { className: 'ta2-panel-err', children: '积分读取失败，请稍后重试' }),
+          status?.expired && jsx('div', { className: 'ta2-panel-err', children: '登录凭据已过期，请在设置页重新登录' }),
           jsxs('div', { className: 'ta2-panel-foot', children: [
             jsx('span', { children: lastRefresh ? `最近刷新 ${formatClock(lastRefresh)}` : '尚未刷新' }),
             status?.expiresAt ? jsx('span', { children: `至 ${new Date(status.expiresAt).toLocaleDateString()}` }) : null,

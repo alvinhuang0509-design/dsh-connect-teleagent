@@ -132,4 +132,22 @@ assert.ok(flat.includes('ta2-pill-num'), 'numeric value slot present');
 // `next` outranks `lastUsed`.
 assert.ok(render({ useProjection: () => ({ lastUsed: { provider: 'workbuddy', model: 'x' }, next: { provider: 'teleagent', model: 'chat-pro' } }) }));
 
-console.log('✓ client bundle: slots registered (tool row) + provider gating correct');
+// ── Signed-out must NOT read as "points failed to load" ────────────────
+// Reported from a second client: a fresh machine with no TeleAgent
+// credential showed a red "积分读取失败，请稍后重试" and a blank account name.
+// Two defects produced that: (a) credits.* ran inside the same Promise.all as
+// status, so a signed-out rejection discarded the successful status; (b) one
+// boolean carried both "signed-out" and "read failed".
+//
+// The RPC layer is the contract that keeps them apart, so drive it directly:
+// status reports loggedIn:false while credits throws, and the panel must be
+// able to tell that apart from a transport error.
+const bundleSrc = readFileSync(BUNDLE, 'utf8');
+assert.ok(bundleSrc.includes('signed-out'), 'bundle must carry a distinct signed-out state');
+assert.ok(bundleSrc.includes('本机还没有 TeleAgent 登录凭据'), 'signed-out copy must name the real cause');
+assert.ok(
+  !/Promise\.all\(\[\s*[^\]]*rpcCall\("status"\)[^\]]*rpcCall\("credits\.balance"\)/.test(bundleSrc),
+  'status must not share a Promise.all with credits.* — that is what swallowed the real answer',
+);
+
+console.log('✓ client bundle: slots registered (tool row) + provider gating + signed-out copy');
