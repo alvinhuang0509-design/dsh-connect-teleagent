@@ -121,6 +121,31 @@ sh: pnpm: command not found
   - `/teleagent balance` / `checkin` / `claim` / `user`
 - **模型选择器**：选 `teleagent` provider 下的模型即可。
 
+## 浏览器自动登录（推荐，1.2.0+）
+
+手动从 Network 面板捞 token 对普通用户门槛太高，所以 1.2.0 加了**浏览器自动登录**——机制和官方桌面端一致：拦截登录回调，只是从外部观察。
+
+用法：**设置 → TeleAgent**，或账号条点开，按「浏览器登录（推荐）」。
+
+插件会：
+1. 启动一个**独立的 Chrome/Edge/Chromium** 窗口（临时配置目录，**不影响你日常用的浏览器**，不读取你的 cookie）
+2. 打开官方登录页，你在窗口里正常登录
+3. 插件通过 **CDP** 监听网络，从回调请求的 `Location` 响应头（或换 token 的响应体 / `teleai-cowork://` deeplink）里取到 token
+4. 自动保存、关闭窗口、清理临时目录
+
+**你不需要复制任何东西。**
+
+实现要点（`lib/chrome-login.js`）：
+
+- **零依赖**：Node 22+ 自带全局 `WebSocket` 和 `fetch`，CDP 直接手写，不引第三方客户端库。
+- 用 `--remote-debugging-port=0` 让 Chrome 自己选端口，从 stderr 的 `DevTools listening on ws://…` 取实际地址（端口写死会和用户的其它调试实例冲突）。
+- `Fetch.enable` 拦截 `*cowork/auth*` 的**响应**阶段，从 `Location` 头取 deeplink；若服务端回 HTML，则读响应体找 deeplink 或换 token 的 JSON 字段。
+- 浏览器发现顺序：Chrome → Chromium → Edge → Brave → Vivaldi（macOS/Windows/Linux 各自路径，Windows 在环境变量缺失时回退到常规安装根）。
+- 生命周期：成功、失败、取消、超时都会 `SIGTERM` 进程并删除临时目录。
+- 一次只允许一个尝试（两个窗口会抢同一个一次性 code）。
+
+拿不到浏览器时会明确报「未找到 Chrome / Edge / Chromium」，并保留手动粘贴作为退路。
+
 ## 在新机器上登录：token 到底在哪
 
 ⚠️ **不要指望从地址栏复制 token——那里没有。** 这是最初版本写错的指引，导致用户反复粘贴失败。
@@ -179,7 +204,7 @@ token 实际走的是 **`teleai-cowork://auth?token=…`** 这条 deeplink，由
 | 能力 | 说明 |
 |---|---|
 | 推理 | ✅ v1 签名，OpenAI 兼容 SSE，工具调用、system、max_tokens、temperature、stop |
-| 登录 | ✅ 复用现有凭据 + 手动粘贴 token（从 Network 面板取；不做 CDP 浏览器自动登录） |
+| 登录 | ✅ 复用现有凭据 + **CDP 浏览器自动登录**（拦截回调，零依赖）+ 手动粘贴退路 |
 | 积分/签到 | ✅ 余额（`data.current_points_balance`）、每日可领/累计天数/累计积分/今日是否已领、一键领取（GET `checkTask`） |
 | 多账号池 | ⚠️ 只使用 `jet-hub/state.json` 里启用的那一个账号（不做换号） |
 | 模型目录 | 静态表 `chat-nano` 轻量 / `chat-lite` 智能 / `chat-pro` 旗舰（官方客户端档位 ID；网关不提供模型列表端点，三档共享 100K 上下文 / 16384 输出） |
@@ -193,6 +218,7 @@ lib/product.js       常量、端点、回退模型表
 lib/sign.js          ★ v1 两轮 HMAC 签名 + 完整对齐的头集合
 lib/credentials.js   凭据解析/复用、installId 补齐
 lib/callback.js      回调 URL / token 解析（无依赖）
+lib/chrome-login.js  CDP 浏览器自动登录（零依赖）
 lib/service.js       user_info / 积分 / 签到 / 登录
 lib/adapter.js       LLM 适配器（ctx.llm.registerAdapter）
 lib/rpc.js           精简设置面板 RPC
