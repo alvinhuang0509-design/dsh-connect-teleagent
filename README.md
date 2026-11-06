@@ -139,7 +139,8 @@ sh: pnpm: command not found
 
 - **零依赖**：Node 22+ 自带全局 `WebSocket` 和 `fetch`，CDP 直接手写，不引第三方客户端库。
 - 用 `--remote-debugging-port=0` 让 Chrome 自己选端口，从 stderr 的 `DevTools listening on ws://…` 取实际地址（端口写死会和用户的其它调试实例冲突）。
-- `Fetch.enable` 拦截 `*cowork/auth*` 的**响应**阶段，从 `Location` 头取 deeplink；若服务端回 HTML，则读响应体找 deeplink 或换 token 的 JSON 字段。
+- **被动监听 `Network.*` 事件**，不暂停页面。最初用 `Fetch.enable` 在 Response 阶段拦截，虽然能拿到 header，但**暂停本身会破坏页面**：即使成对调用 `continueResponse`（返回成功），文档也不渲染，登录页脚本不执行，回调永远不发生——已用本地假授权服务器反复实测确认。改为只观察：`Location` 响应头、`requestWillBeSent` 的 `redirectResponse`、以及 200 响应体（`Network.getResponseBody` 对已完成请求不消耗内容）。
+- 启动参数关掉后台节流（`--disable-background-timer-throttling` 等），否则登录页用定时器做的跳转会被后台标签节流卡住。
 - 浏览器发现顺序：Chrome → Chromium → Edge → Brave → Vivaldi（macOS/Windows/Linux 各自路径，Windows 在环境变量缺失时回退到常规安装根）。
 - 生命周期：成功、失败、取消、超时都会 `SIGTERM` 进程并删除临时目录。
 - 一次只允许一个尝试（两个窗口会抢同一个一次性 code）。
