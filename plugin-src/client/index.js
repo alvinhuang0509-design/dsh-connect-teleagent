@@ -175,71 +175,6 @@ function useAccountState(rpcCall, active) {
   return { status, balance, checkin, problem, busy, loaded, refreshedAt, load };
 }
 
-/**
- * Poll the browser-assisted login.
- *
- * The host side is fire-and-forget (a login takes tens of seconds), so this
- * polls `login.browser.status` while an attempt is in flight and stops as soon
- * as it settles. `onDone` runs once when the attempt reports success so the
- * caller can refresh the account state.
- */
-function useBrowserLogin(rpcCall, onDone) {
-  const [state, setState] = useState({ phase: 'idle', note: null });
-  const [available, setAvailable] = useState(null);
-  const timerRef = useRef(null);
-  const doneRef = useRef(onDone);
-  doneRef.current = onDone;
-
-  const stop = useCallback(() => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-  }, []);
-
-  const poll = useCallback(async () => {
-    try {
-      const r = await rpcCall('login.browser.status');
-      if (!r) return;
-      setAvailable({ available: r.available, browserName: r.browserName, note: r.note });
-      setState((prev) => {
-        // Report `done` once, then settle to idle so a later refresh does not
-        // re-announce an old success.
-        if (r.state === 'done' && prev.phase !== 'done') {
-          doneRef.current?.(r.result ?? null);
-        }
-        return { phase: r.state ?? 'idle', note: r.note ?? null };
-      });
-      if (['done', 'failed', 'idle'].includes(r.state)) {
-        stop();
-      }
-    } catch (error) {
-      setState({ phase: 'failed', note: error?.message ?? String(error) });
-      stop();
-    }
-  }, [rpcCall, stop]);
-
-  const start = useCallback(async () => {
-    setState({ phase: 'starting', note: null });
-    try {
-      const r = await rpcCall('login.browser.start');
-      if (r?.started === false) setState({ phase: r.state ?? 'waiting', note: '已有一次登录在进行中' });
-      stop();
-      timerRef.current = setInterval(() => { void poll(); }, 1200);
-      void poll();
-    } catch (error) {
-      setState({ phase: 'failed', note: error?.message ?? String(error) });
-    }
-  }, [rpcCall, poll, stop]);
-
-  const cancel = useCallback(async () => {
-    try { await rpcCall('login.browser.cancel'); } catch { /* best effort */ }
-    stop();
-    setState({ phase: 'idle', note: '已取消' });
-  }, [rpcCall, stop]);
-
-  useEffect(() => () => stop(), [stop]);
-
-  return { state, available, start, cancel, poll };
-}
-
 /** Chip + popover live in the composer tool row, immediately before the model picker. */
 function TeleagentChip({ rpcCall, useProjection }) {
   const projection = typeof useProjection === 'function' ? useProjection('modelSelection') : undefined;
@@ -258,11 +193,6 @@ function TeleagentChip({ rpcCall, useProjection }) {
 
   const rootRef = useRef(null);
   const popRef = useRef(null);
-
-  // Browser-assisted login: the primary path. It intercepts the callback the
-  // same way the official desktop app does, so the user never has to find a
-  // token by hand.
-  const browser = useBrowserLogin(rpcCall, () => { load().catch(() => {}); });
 
   // Anchor above the chip; fall below when the composer sits high on screen.
   React.useLayoutEffect(() => {
@@ -340,43 +270,14 @@ function TeleagentChip({ rpcCall, useProjection }) {
   // invite, a loading skeleton, and the account readout.
   let body;
   if (signedOut) {
-    const running = ['starting', 'waiting', 'saving'].includes(browser.state.phase);
-    const browserUnavailable = browser.available?.available === false;
     body = jsxs('div', { className: 't2-empty', children: [
       jsx('div', { className: 't2-empty-title', children: '这台机器还没有登录 TeleAgent' }),
-      jsx('div', { className: 't2-muted', children: '登录后即可查看积分、每日签到，并直接用它对话。' }),
-
-      // Primary path: a dedicated browser window; we intercept the callback so
-      // the user never has to locate a token themselves.
-      jsx('div', { className: 't2-login', children: running
-        ? jsx('button', { type: 'button', className: 't2-btn', onClick: browser.cancel, children: '取消' })
-        : jsx('button', {
-          type: 'button',
-          className: 't2-btn primary',
-          disabled: browserUnavailable || !loaded,
-          onClick: () => { void browser.start(); },
-          children: '浏览器登录（推荐）',
-        }) }),
-      running && jsxs('div', { className: 't2-muted', children: [
-        jsx('div', { children: browser.state.note ?? '请在打开的浏览器窗口里完成登录…' }),
-        jsx('div', { className: 't2-dim', children: '登录完成后窗口会自动关闭，无需复制任何东西。' }),
-      ] }),
-      browserUnavailable && jsx('div', { className: 't2-err', children: browser.available.note }),
-      browser.state.phase === 'failed' && jsxs('div', { className: 't2-login', style: { flexDirection: 'column', alignItems: 'stretch' }, children: [
-        jsx('div', { className: 't2-err', style: { whiteSpace: 'pre-wrap' }, children: browser.state.note || '浏览器登录失败' }),
-        jsx('button', {
-          type: 'button',
-          className: 't2-btn',
-          onClick: () => { void browser.start(); },
-          children: '重试浏览器登录',
-        }),
-      ] }),
-
-      !running && jsxs('div', { className: 't2-login', children: [
+      jsx('div', { className: 't2-muted', children: '在官方页面完成授权后，把 token 粘贴到下面即可登录。' }),
+      jsxs('div', { className: 't2-login', children: [
         jsx('input', {
           className: 't2-input',
           value: callback,
-          placeholder: '或手动粘贴 token',
+          placeholder: '粘贴 token',
           spellCheck: false,
           onChange: (e) => setCallback(e.target.value),
           onKeyDown: (e) => {
@@ -387,13 +288,13 @@ function TeleagentChip({ rpcCall, useProjection }) {
         }),
         jsx('button', {
           type: 'button',
-          className: 't2-btn',
+          className: 't2-btn primary',
           disabled: submitting || !callback.trim(),
           onClick: submitLogin,
           children: submitting ? '登录中…' : '登录',
         }),
       ] }),
-      !running && jsx('div', { className: 't2-dim', children: '手动粘贴时注意：授权后地址栏只有 code、没有 token，完整取法见「设置 → TeleAgent」。' }),
+      jsx('div', { className: 't2-dim', children: '授权后地址栏只有 code、没有 token；完整取法见「设置 → TeleAgent」。' }),
     ] });
   } else if (!loaded) {
     body = jsxs('div', { className: 't2-pop-body', children: [
@@ -509,7 +410,6 @@ function TeleagentPage({ rpcCall }) {
   const state = useAccountState(rpcCall, true);
   const { status, balance, checkin, problem, busy, load } = state;
 
-  const browser = useBrowserLogin(rpcCall, () => { load().catch(() => {}); });
   const [models, setModels] = useState([]);
   const [config, setConfig] = useState(null);
   const [ctxDraft, setCtxDraft] = useState('');
@@ -618,26 +518,7 @@ function TeleagentPage({ rpcCall }) {
     ] }),
 
     jsxs('div', { className: 't2-card', children: [
-      jsx('div', { className: 't2-key', children: '登录方式' }),
-      jsx('div', { className: 't2-muted', children: browser.available?.available === false
-        ? browser.available.note
-        : `推荐用「浏览器登录」：插件会打开一个独立的浏览器窗口（${browser.available?.browserName ?? 'Chromium'}，使用临时配置目录，不影响你日常用的浏览器），并在内部截获登录回调，完成后自动关闭，不需要你复制任何东西。` }),
-      jsxs('div', { className: 't2-row', children: ['starting', 'waiting', 'saving'].includes(browser.state.phase)
-        ? [
-          jsx('button', { key: 'cancel', className: 't2-btn', onClick: browser.cancel, children: '取消登录' }),
-          jsx('span', { key: 'note', className: 't2-muted', children: browser.state.note ?? '等待浏览器登录完成…' }),
-        ]
-        : jsx('button', {
-          key: 'start',
-          className: 't2-btn primary',
-          disabled: browser.available?.available === false,
-          onClick: () => { void browser.start(); },
-          children: '浏览器登录（推荐）',
-        }) }),
-      browser.state.phase === 'failed' && jsx('div', { className: 't2-err', style: { whiteSpace: 'pre-wrap' }, children: browser.state.note }),
-      browser.state.phase === 'done' && jsx('div', { className: 't2-ok', children: browser.state.note }),
-
-      jsx('div', { className: 't2-key', children: '或手动粘贴 token' }),
+      jsx('div', { className: 't2-key', children: '手动登录' }),
       jsxs('div', { className: 't2-muted', children: [
         jsx('div', { children: '⚠️ 授权完成后地址栏里是 ' }),
         jsx('code', { children: '…/cowork/auth?code=ucc.XXXX' }),

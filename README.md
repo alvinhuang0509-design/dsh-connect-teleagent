@@ -121,42 +121,11 @@ sh: pnpm: command not found
   - `/teleagent balance` / `checkin` / `claim` / `user`
 - **模型选择器**：选 `teleagent` provider 下的模型即可。
 
-## 浏览器自动登录（推荐，1.2.0+）
+## 登录：手动粘贴 token
 
-> **1.2.5 稳定性修复**：插件拉起的 Chrome 在受限宿主环境（从 DSH 主进程 fork）里可能继承一个它自己无法初始化的沙箱，启动即崩（`sandbox initialization failed` → `SIGTRAP`，表现是窗口一闪就没了）。现在做**启动失败降级重试**：第一次正常启动，失败后用 `--no-sandbox --disable-gpu` 重试一次（仅此一次、仅针对本插件那个一次性临时 profile），两次都失败则报出**带 Chrome stderr 末尾**的可读错误。同时：失败原因现在会一直显示在登录按钮旁（不再随弹层关闭消失）并带「重试」按钮；启动成功后清扫超过 1 小时的历史临时目录（此前宿主被杀时 `finally` 不执行会累积泄漏）。
+> **1.2.6**：移除了浏览器自动登录（CDP 拦截回调）。它在你当前环境里不可靠——插件拉起的 Chrome 子进程受沙箱限制，且官方 TeleAgent 客户端注册了 `teleai-cowork://` 协议会抢走 token。现在只保留最稳定的一条路：**手动粘贴 token**。
 
-
-
-手动从 Network 面板捞 token 对普通用户门槛太高，所以 1.2.0 加了**浏览器自动登录**——机制和官方桌面端一致：拦截登录回调，只是从外部观察。
-
-用法：**设置 → TeleAgent**，或账号条点开，按「浏览器登录（推荐）」。
-
-插件会：
-1. 启动一个**独立的 Chrome/Edge/Chromium** 窗口（临时配置目录，**不影响你日常用的浏览器**，不读取你的 cookie）
-2. 打开官方登录页，你在窗口里正常登录
-3. 插件通过 **CDP** 监听网络，从回调请求的 `Location` 响应头（或换 token 的响应体 / `teleai-cowork://` deeplink）里取到 token
-4. 自动保存、关闭窗口、清理临时目录
-
-**你不需要复制任何东西。**
-
-实现要点（`lib/chrome-login.js`）：
-
-- **零依赖**：Node 22+ 自带全局 `WebSocket` 和 `fetch`，CDP 直接手写，不引第三方客户端库。
-- **多目标跟踪**：在浏览器层面 `Target.setDiscoverTargets` + `setAutoAttach`，回调落在新窗口或新标签也能看到（只 attach 单个页面会漏掉真实流程）。
-- 用 `--remote-debugging-port=0` 让 Chrome 自己选端口，从 stderr 的 `DevTools listening on ws://…` 取实际地址（端口写死会和用户的其它调试实例冲突）。
-- **从此处取 token：`cowork/auth` 的 200 响应体**。真实登录的完整事实（2026-11-07 实测）：
-  1. `cowork/auth?code=ucc.…` 返回 **200 的 182KB HTML**，body 里就埋着 `teleai-cowork://auth?token=…`（token 已在其中，**有效**）
-  2. ~500ms 后页面 JS 才触发 deeplink 导航
-  3. 但那时 OS 已把 `teleai-cowork://` 路由给**官方 TeleAgent 客户端**（系统注册的 handler），官方端抢走并消费了 token（一次性）
-
-  ⇒ 正确做法是在 `Network.loadingFinished` 后从响应体里读 token（`getResponseBody` 只在传输完成后可靠）；deeplink 导航只作为没有官方客户端的机器上的兜底。
-- **被动监听 `Network.*` 事件**作为兜底（302 的 `Location`、换 token 的响应体）。最初用 `Fetch.enable` 在 Response 阶段拦截，虽然能拿到 header，但**暂停本身会破坏页面**：即使成对调用 `continueResponse`（返回成功），文档也不渲染，登录页脚本不执行，回调永远不发生——已用本地假授权服务器反复实测确认。改为只观察：`Location` 响应头、`requestWillBeSent` 的 `redirectResponse`、以及 200 响应体（`Network.getResponseBody` 对已完成请求不消耗内容）。
-- 启动参数关掉后台节流（`--disable-background-timer-throttling` 等），否则登录页用定时器做的跳转会被后台标签节流卡住。
-- 浏览器发现顺序：Chrome → Chromium → Edge → Brave → Vivaldi（macOS/Windows/Linux 各自路径，Windows 在环境变量缺失时回退到常规安装根）。
-- 生命周期：成功、失败、取消、超时都会 `SIGTERM` 进程并删除临时目录。
-- 一次只允许一个尝试（两个窗口会抢同一个一次性 code）。
-
-拿不到浏览器时会明确报「未找到 Chrome / Edge / Chromium」，并保留手动粘贴作为退路。
+手动从 Network 面板捞 token 对普通用户门槛较高，但它是唯一在你环境里**确定可用**的方式。
 
 ## 在新机器上登录：token 到底在哪
 
@@ -216,7 +185,7 @@ token 实际走的是 **`teleai-cowork://auth?token=…`** 这条 deeplink，由
 | 能力 | 说明 |
 |---|---|
 | 推理 | ✅ v1 签名，OpenAI 兼容 SSE，工具调用、system、max_tokens、temperature、stop |
-| 登录 | ✅ 复用现有凭据 + **CDP 浏览器自动登录**（拦截回调，零依赖）+ 手动粘贴退路 |
+| 登录 | ✅ 复用现有凭据 + 手动粘贴 token（已移除不可靠的浏览器自动登录） |
 | 积分/签到 | ✅ 余额（`data.current_points_balance`）、每日可领/累计天数/累计积分/今日是否已领、一键领取（GET `checkTask`） |
 | 多账号池 | ⚠️ 只使用 `jet-hub/state.json` 里启用的那一个账号（不做换号） |
 | 模型目录 | 静态表 `chat-nano` 轻量 / `chat-lite` 智能 / `chat-pro` 旗舰（官方客户端档位 ID；网关不提供模型列表端点，三档共享 100K 上下文 / 16384 输出） |
@@ -230,7 +199,6 @@ lib/product.js       常量、端点、回退模型表
 lib/sign.js          ★ v1 两轮 HMAC 签名 + 完整对齐的头集合
 lib/credentials.js   凭据解析/复用、installId 补齐
 lib/callback.js      回调 URL / token 解析（无依赖）
-lib/chrome-login.js  CDP 浏览器自动登录（零依赖）
 lib/service.js       user_info / 积分 / 签到 / 登录
 lib/adapter.js       LLM 适配器（ctx.llm.registerAdapter）
 lib/rpc.js           精简设置面板 RPC
